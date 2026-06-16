@@ -1,6 +1,5 @@
 import os
 import re
-import random
 from dotenv import load_dotenv
 
 from fastapi import FastAPI
@@ -13,94 +12,45 @@ load_dotenv()
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-MIN_BYTES = 200
-MAX_BYTES = 700
-
-FIXED_PREFIX_KEYWORD = "학교폭력예방교육"
+# NEIS 바이트 제한 설정 (약 750바이트 미만 권장)
+MAX_BYTES = 740
 
 def normalize_date(date_str: str) -> str:
     s = (date_str or "").strip()
-    if not s:
-        return ""
+    if not s: return ""
     s = s.replace("-", ".").replace("/", ".")
     parts = [p for p in s.split(".") if p]
     if len(parts) >= 3:
-        y, m, d = parts[0], parts[1], parts[2]
-        return f"{int(y):04d}.{int(m):02d}.{int(d):02d}."
+        return f"{int(parts[0]):04d}.{int(parts[1]):02d}.{int(parts[2]):02d}."
     return s
 
 def clean_text(text: str) -> str:
     return (text or "").strip()
 
-def ends_with_noun_ending(text: str) -> bool:
-    text = text.strip()
-    return text.endswith(("함.", "임.", "됨."))
-
 def ensure_noun_ending(text: str) -> str:
+    """서술형을 생활기록부용 명사형으로 자연스럽게 변환"""
     text = clean_text(text)
-    if not text:
-        return text
+    if not text: return text
 
-    # 이미 종결형 어미로 끝나면 추가하지 않음
-    if ends_with_noun_ending(text):
-        return text
+    # 1. 어색한 결합(깨달음함, 성취함함 등) 방지를 위한 사전 치환
+    text = text.replace("깨달음함.", "깨달음.").replace("느낌함.", "느낌.").replace("배움함.", "배움.")
+    text = text.replace("함함.", "함.").replace("됨됨.", "됨.")
 
-    # 어색한 중복 표현 제거
-    replacements = {
-        "었음됨.": "됨.",
-        "였음됨.": "됨.",
-        "음됨.": "됨.",
-        "함됨.": "함.",
-        "임됨.": "임.",
-        "됨됨.": "됨.",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-
-    # 일반 서술형 종결을 명사형으로 변환
-    if text.endswith("했다."):
-        text = text[:-3] + "함."
-    elif text.endswith("하였다."):
-        text = text[:-4] + "함."
-    elif text.endswith("했다"):
-        text = text[:-2] + "함."
-    elif text.endswith("하였다"):
-        text = text[:-4] + "함."
-    elif text.endswith("였다."):
-        text = text[:-3] + "임."
-    elif text.endswith("이다."):
-        text = text[:-3] + "임."
-    elif text.endswith("입니다."):
-        text = text[:-4] + "임."
-    elif text.endswith("습니다."):
-        text = text[:-3] + "함."
-    elif text.endswith("다."):
-        text = text[:-2] + "함."
-    elif text.endswith("다"):
-        text = text[:-1] + "함."
-    elif text.endswith("요."):
-        text = text[:-2] + "함."
-
-    # 최종 점검: 여전히 명사형 종결이 아니면 한 번만 붙임
-    if not ends_with_noun_ending(text):
-        if text.endswith("."):
-            text = text[:-1]
-        text += "됨."
-
-    return text
-
-def pad_to_min_bytes(text: str, min_bytes: int = MIN_BYTES) -> str:
-    tails = [
-        " 또한 신체적 폭력뿐 아니라 정신적·재산적 피해와 정보통신망을 이용한 피해도 학교폭력에 포함된다는 점을 이해하는 계기가 됨.",
-        " 아울러 사례를 살펴보며 피해의 다양성을 인식하고, 서로를 존중하는 태도의 중요성을 되새기는 시간이 됨.",
-        " 더불어 공감과 배려의 필요성을 생각해 보며 안전한 관계 형성의 중요성을 배우는 의미 있는 경험이 됨.",
-        " 이를 통해 학교폭력의 범위를 폭넓게 이해하고, 바람직한 생활 태도를 익히는 계기가 됨.",
-        " 나아가 폭력 예방의 중요성을 인식하고 공동체 의식을 기르는 시간이 됨."
+    # 2. 문장 끝 서술어 변환
+    conversions = [
+        (r"하였다\.?$", "함."), (r"했다\.?$", "함."), (r"하였다$", "함."),
+        (r"이다\.?$", "임."), (r"였다\.?$", "임."), (r"입니다\.?$", "임."),
+        (r"습니다\.?$", "함."), (r"한다\.?$", "함."), (r"다\.?$", "함.")
     ]
-
-    while len(text.encode("utf-8")) < min_bytes:
-        text = text.rstrip(".") + random.choice(tails)
-
+    for pattern, replacement in conversions:
+        if re.search(pattern, text):
+            text = re.sub(pattern, replacement, text)
+            break
+    
+    # 3. 최종 확인: 명사형 어미가 아니면 '함.' 추가 (단, 이미 명사로 끝났다면 점만 찍기)
+    if not text.endswith(("함.", "임.", "됨.", "음.", "기.")):
+        text = text.rstrip(".") + "함."
+    
     return text
 
 class ActivityRequest(BaseModel):
@@ -115,143 +65,76 @@ def index():
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NEIS 기록 생성기</title>
+  <meta charset="UTF-8" /><title>NEIS 기록 생성기</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 900px;
-      margin: 40px auto;
-      padding: 20px;
-      background: #f7f9fc;
-    }
-    .card {
-      background: white;
-      padding: 24px;
-      border-radius: 12px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-    }
-    label {
-      display: block;
-      margin-top: 14px;
-      font-weight: bold;
-    }
-    input, select, textarea, button {
-      width: 100%;
-      box-sizing: border-box;
-      margin-top: 6px;
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      font-size: 15px;
-    }
-    textarea {
-      min-height: 100px;
-      resize: vertical;
-    }
-    button {
-      margin-top: 18px;
-      background: #2563eb;
-      color: white;
-      border: none;
-      cursor: pointer;
-      font-weight: bold;
-    }
-    button:hover {
-      background: #1d4ed8;
-    }
-    .btn-secondary {
-      background: #16a34a;
-      margin-top: 10px;
-    }
-    .btn-secondary:hover {
-      background: #15803d;
-    }
-    .hint {
-      font-size: 13px;
-      color: #555;
-      margin-top: 4px;
-    }
-    .result {
-      margin-top: 20px;
-      padding: 16px;
-      background: #eef6ff;
-      border-radius: 8px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
+    body { font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f8fafc; color: #1e293b; }
+    .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+    h2 { color: #2563eb; margin-bottom: 25px; text-align: center; }
+    label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; }
+    input, select, textarea { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 15px; box-sizing: border-box; }
+    textarea { resize: vertical; min-height: 100px; }
+    button { width: 100%; margin-top: 20px; padding: 14px; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+    .btn-generate { background: #2563eb; color: white; }
+    .btn-generate:hover { background: #1d4ed8; }
+    .btn-copy { background: #64748b; color: white; margin-top: 10px; display: none; }
+    .btn-copy:hover { background: #475569; }
+    .result-container { margin-top: 25px; position: relative; }
+    .result { padding: 20px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; white-space: pre-wrap; line-height: 1.7; font-size: 15px; min-height: 50px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>NEIS 기록 생성기</h1>
-
+    <h2>📝 NEIS 맞춤형 기록 생성기</h2>
     <label>활동 유형</label>
-    <select id="activity_type">
-      <option value="진로활동">진로활동</option>
-      <option value="자율활동">자율활동</option>
-    </select>
-
-    <label>날짜</label>
-    <input type="date" id="activity_date" />
-
-    <label>활동명</label>
-    <input type="text" id="activity_name" placeholder="예: 학교폭력예방교육" value="학교폭력예방교육" />
-
-    <label>활동내용</label>
-    <textarea id="activity_content" placeholder="예: 역할극, 사례분석, 토의"></textarea>
-    <div class="hint">출력은 항상 "학교폭력예방교육(YYYY.MM.DD.)을 통해"로 시작합니다.</div>
-
-    <button onclick="generateRecord()">기록 생성</button>
-    <button class="btn-secondary" onclick="copyRecord()">결과 복사</button>
-
-    <div id="result" class="result" style="display:none;"></div>
+    <select id="activity_type"><option value="자율활동">자율활동</option><option value="진로활동">진로활동</option><option value="동아리">동아리활동</option></select>
+    <label>활동 날짜</label><input type="date" id="activity_date" />
+    <label>활동명</label><input type="text" id="activity_name" placeholder="활동명을 입력하세요 (예: 환경보호 캠페인)" />
+    <label>내용 키워드</label>
+    <textarea id="activity_content" placeholder="학생의 구체적인 활동이나 특징을 입력하세요."></textarea>
+    
+    <button class="btn-generate" onclick="generate()">기록 생성하기</button>
+    
+    <div class="result-container">
+      <div id="result" class="result">생성된 내용이여기에 표시됩니다.</div>
+      <button id="copyBtn" class="btn-copy" onclick="copyToClipboard()">📋 결과 복사하기</button>
+    </div>
   </div>
 
   <script>
-    function getResultText() {
-      const result = document.getElementById("result");
-      return result.textContent || "";
-    }
+    async function generate() {
+      const btn = document.querySelector('.btn-generate');
+      const resultDiv = document.getElementById("result");
+      const copyBtn = document.getElementById("copyBtn");
+      
+      btn.innerText = "GPT가 문장을 정제 중입니다...";
+      btn.disabled = true;
 
-    async function generateRecord() {
-      const activity_type = document.getElementById("activity_type").value;
-      const activity_date = document.getElementById("activity_date").value;
-      const activity_name = document.getElementById("activity_name").value;
-      const activity_content = document.getElementById("activity_content").value;
-
-      const response = await fetch("/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          activity_type,
-          activity_date,
-          activity_name,
-          activity_content
-        })
-      });
-
-      const data = await response.json();
-      const result = document.getElementById("result");
-      result.style.display = "block";
-      result.textContent = data.record || data.detail || "결과 없음";
-    }
-
-    async function copyRecord() {
-      const text = getResultText();
-      if (!text) {
-        alert("복사할 결과가 없습니다.");
-        return;
-      }
       try {
-        await navigator.clipboard.writeText(text);
-        alert("결과가 복사되었습니다.");
+        const res = await fetch("/generate", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            activity_type: document.getElementById("activity_type").value,
+            activity_date: document.getElementById("activity_date").value,
+            activity_name: document.getElementById("activity_name").value,
+            activity_content: document.getElementById("activity_content").value
+          })
+        });
+        const data = await res.json();
+        resultDiv.textContent = data.record || data.detail;
+        copyBtn.style.display = "block";
       } catch (e) {
-        alert("복사에 실패했습니다.");
+        resultDiv.textContent = "오류가 발생했습니다.";
+      } finally {
+        btn.innerText = "기록 생성하기";
+        btn.disabled = false;
       }
+    }
+
+    function copyToClipboard() {
+      const text = document.getElementById("result").textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        alert("기록이 클립보드에 복사되었습니다!");
+      });
     }
   </script>
 </body>
@@ -260,71 +143,50 @@ def index():
 
 @app.post("/generate")
 def generate_record(req: ActivityRequest):
-    activity_type = clean_text(req.activity_type)
-    activity_date = normalize_date(req.activity_date)
-    activity_name = clean_text(req.activity_name)
-    activity_content = clean_text(req.activity_content)
-
-    if not activity_type:
-        return JSONResponse({"detail": "활동 유형이 비어 있습니다."}, status_code=400)
-    if not activity_date:
-        return JSONResponse({"detail": "날짜가 비어 있습니다."}, status_code=400)
-    if not activity_name:
-        return JSONResponse({"detail": "활동명이 비어 있습니다."}, status_code=400)
-    if not activity_content:
-        return JSONResponse({"detail": "활동내용이 비어 있습니다."}, status_code=400)
+    date_str = normalize_date(req.activity_date)
+    content = clean_text(req.activity_content)
+    name = clean_text(req.activity_name)
 
     prompt = f"""
-너는 NEIS 학생생활기록부 문장을 작성하는 도우미다.
+전문의적인 생활기록부 작성자로서 아래 정보를 바탕으로 학생의 특성이 드러나는 문장을 작성하라.
 
-반드시 아래 조건을 지켜라.
-- 출력은 1문장만 작성
-- 문장은 반드시 "{FIXED_PREFIX_KEYWORD}({activity_date})을 통해"로 시작할 것
-- 고정 템플릿처럼 보이지 않도록 뒤 문장은 매번 다양하게 작성할 것
-- 활동내용이 키워드형이면 자연스럽게 풀어쓸 것
-- 활동내용을 그대로 나열하지 말 것
-- 학교폭력은 신체적 폭력뿐 아니라 정신적 피해, 재산적 피해, 정보통신망을 이용한 피해도 포함된다는 점을 드러낼 것
-- 맞춤법과 어법을 정확히 지킬 것
-- 문장 연결은 자연스러워야 함
-- 명사형 종결어미로 끝낼 것
-- 단, 이미 명사형 종결어미로 끝난 문장에는 종결어미를 중복해서 붙이지 말 것
-- 어색한 종결(예: 됨됨, 었음됨) 금지
-- 200바이트 이상 700바이트 이하
-- 결과만 출력
+[정보]
+- 활동명: {name}
+- 날짜: {date_str}
+- 내용: {content}
 
-활동 유형:
-{activity_type}
-
-활동명:
-{activity_name}
-
-날짜:
-{activity_date}
-
-활동내용:
-{activity_content}
-
-출력 예시:
-{FIXED_PREFIX_KEYWORD}({activity_date})을 통해 사례를 살펴보고 토의와 역할극에 참여하며, 신체적 폭력뿐 아니라 정신적·재산적 피해와 정보통신망을 이용한 피해도 학교폭력에 해당함을 이해하는 시간이 됨.
+[규칙]
+1. 반드시 "{name}({date_str})을 통해"로 시작할 것.
+2. '학교폭력'이라는 키워드는 활동명에 '학교폭력'이 포함된 경우에만 사용할 것. 그 외에는 활동 내용에 맞는 성취 위주로 작성할 것.
+3. 입력된 {content}을 바탕으로 학생이 어떻게 행동했는지 구체적인 서사로 풀어서 130~170자 정도의 분량으로 작성할 것.
+4. 문장 속에서 '깨달음함', '배움함'과 같은 어색한 중복 표현이 생기지 않도록 매끄러운 '함.', '임.', '됨.' 어미를 사용할 것.
+5. 결과는 단 한 개의 완성된 문장으로 출력할 것.
 """
 
     try:
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
-            input=prompt,
-            temperature=0.95,
+            messages=[
+                {"role": "system", "content": "너는 고등학교 생활기록부 작성 전문가다. 문법적으로 완벽한 명사형 종결 어미를 사용하며, 학생의 활동에 따른 개별적 특성을 구체적으로 서술한다."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
         )
-
-        text = response.output_text.strip()
+        text = response.choices[0].message.content.strip()
+        
+        # 후처리 로직 적용 (어색한 문미 수정)
         text = ensure_noun_ending(text)
-        text = pad_to_min_bytes(text, MIN_BYTES)
 
+        # 바이트 제한
         if len(text.encode("utf-8")) > MAX_BYTES:
-            raw = text.encode("utf-8")[:MAX_BYTES]
-            text = raw.decode("utf-8", errors="ignore").rstrip(" ,;.")
+            while len(text.encode("utf-8")) > MAX_BYTES:
+                text = text[:-1]
             text = ensure_noun_ending(text)
 
         return {"record": text}
-
     except Exception as e:
-        return JSONResponse({"detail": f"생성 중 오류 발생: {str(e)}"}, status_code=500)
+        return JSONResponse({"detail": str(e)}, status_code=500)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
