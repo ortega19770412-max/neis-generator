@@ -1,170 +1,129 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NEIS Record Generator</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEIS 활동 기록 생성기</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --primary-color: #007bff; }
+        body { background-color: #f4f7f9; padding: 40px 20px; font-family: 'Pretendard', sans-serif; }
+        .container { max-width: 800px; background: white; padding: 40px; border-radius: 15px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
+        .header-title { font-weight: 700; color: #333; margin-bottom: 30px; text-align: center; }
+        .form-label { font-weight: 600; color: #495057; }
+        #resultArea { 
+            background: #f8f9fa; min-height: 150px; border: 1px solid #ced4da;
+            border-radius: 10px; padding: 20px; margin-top: 25px; 
+            white-space: pre-wrap; cursor: pointer; transition: all 0.2s;
+            font-size: 1.05rem; line-height: 1.7;
+        }
+        #resultArea:hover { background: #e9ecef; border-color: #adb5bd; }
+        .loading { display: none; text-align: center; margin-top: 20px; }
+        .byte-cnt { font-size: 0.9rem; color: #dc3545; text-align: right; margin-top: 8px; font-weight: bold; }
+        .hint { font-size: 0.8rem; color: #6c757d; margin-top: 4px; }
+    </style>
 </head>
-<body class="bg-slate-100 min-h-screen text-slate-800">
-  <div class="max-w-4xl mx-auto px-4 py-8">
-    <div class="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden">
-      <div class="bg-indigo-600 text-white px-6 py-5">
-        <h1 class="text-2xl font-bold">NEIS Record Generator</h1>
-        <p class="text-sm opacity-90 mt-1">OpenAI 전용 2~3문장 NEIS 문장 생성</p>
-      </div>
+<body>
 
-      <div class="p-6 space-y-6">
-        <form id="generateForm" class="space-y-5">
-          <div>
-            <label class="block text-sm font-medium mb-2">활동 분류</label>
-            <select
-              id="activity_type"
-              class="w-full rounded-xl border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="자율활동">자율활동</option>
-              <option value="진로활동">진로활동</option>
-            </select>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">활동명</label>
-            <input
-              id="activity_name"
-              type="text"
-              placeholder="예: 학교폭력예방교육"
-              class="w-full rounded-xl border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">날짜</label>
-            <input
-              id="date"
-              type="date"
-              class="w-full rounded-xl border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-
-          <div class="flex flex-wrap gap-3">
-            <button
-              type="submit"
-              class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-3 rounded-xl transition"
-            >
-              생성하기
-            </button>
-            <button
-              type="button"
-              id="copyBtn"
-              class="bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold px-5 py-3 rounded-xl transition"
-            >
-              결과 복사
-            </button>
-          </div>
-        </form>
-
-        <div class="border-t pt-6 space-y-4">
-          <div class="flex flex-wrap gap-4 text-sm text-slate-600">
-            <div><span class="font-semibold">모드:</span> <span id="mode">openai</span></div>
-            <div><span class="font-semibold">바이트 수:</span> <span id="byteLength">-</span></div>
-            <div><span class="font-semibold">700바이트 이내:</span> <span id="withinLimit">-</span></div>
-            <div><span class="font-semibold">재시도:</span> <span id="retryCount">-</span></div>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">결과</label>
-            <div
-              id="result"
-              class="min-h-28 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 whitespace-pre-wrap leading-relaxed"
-            >
-              결과가 여기에 표시됩니다.
+<div class="container">
+    <h2 class="header-title">🎓 생활기록부 문장 생성기</h2>
+    
+    <form id="recordForm">
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label class="form-label">활동 구분</label>
+                <select class="form-select" name="activity_type" required>
+                    <option value="자율활동" selected>자율활동</option>
+                    <option value="진로활동">진로활동</option>
+                    <option value="동아리활동">동아리활동</option>
+                    <option value="봉사활동">봉사활동</option>
+                    <option value="개인특기사항">교과세특/기타</option>
+                </select>
             </div>
-          </div>
+            <div class="col-md-6">
+                <label class="form-label">활동 날짜</label>
+                <!-- 날짜 지정 방식으로 변경 -->
+                <input type="date" class="form-control" name="activity_date" id="activity_date" required>
+            </div>
         </div>
-      </div>
+
+        <div class="mb-3">
+            <label class="form-label">활동명</label>
+            <input type="text" class="form-control" name="activity_name" placeholder="예: 양성평등 교육, 진로 캠프, 전공 탐색" required>
+        </div>
+        
+        <div class="mb-4">
+            <label class="form-label">내용 키워드 (관찰 기록)</label>
+            <textarea class="form-control" name="student_keywords" rows="6" 
+                placeholder="학생이 보여준 구체적인 행동, 소감, 성장한 내용을 적어주세요. 
+(작성 예: '파이썬을 활용한 데이터 분석에 흥미를 느낌', '진로에 대한 확신을 가짐')" required></textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-100 py-2">풍부한 문장 생성하기</button>
+    </form>
+
+    <div class="loading">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-3 text-muted">AI가 맞춤형 문장을 작성 중입니다...</p>
     </div>
-  </div>
 
-  <script>
-    const form = document.getElementById('generateForm');
-    const resultEl = document.getElementById('result');
-    const modeEl = document.getElementById('mode');
-    const byteLengthEl = document.getElementById('byteLength');
-    const withinLimitEl = document.getElementById('withinLimit');
-    const retryCountEl = document.getElementById('retryCount');
-    const copyBtn = document.getElementById('copyBtn');
-    const dateInput = document.getElementById('date');
-    const activityType = document.getElementById('activity_type');
+    <div id="resultWrapper" style="display: none;">
+        <div id="resultArea" onclick="copyToClipboard()" title="클릭하면 복사됩니다."></div>
+        <p class="hint text-center">박스를 클릭하면 클립보드에 복사됩니다.</p>
+        <div class="byte-cnt" id="byteCount">0 / 700 bytes</div>
+    </div>
+</div>
 
-    function setTodayDate() {
-      const today = new Date();
-      const yyyy = today.getFullYear();
-      const mm = String(today.getMonth() + 1).padStart(2, '0');
-      const dd = String(today.getDate()).padStart(2, '0');
-      dateInput.value = `${yyyy}-${mm}-${dd}`;
+<script>
+    // 오늘 날짜로 기본값 설정
+    document.getElementById('activity_date').value = new Date().toISOString().substring(0, 10);
+
+    const form = document.getElementById('recordForm');
+    const resultArea = document.getElementById('resultArea');
+    const resultWrapper = document.getElementById('resultWrapper');
+    const byteCount = document.getElementById('byteCount');
+    const loading = document.querySelector('.loading');
+
+    // 한글 바이트 계산 (NEIS 3바이트 기준 소극적 계산)
+    function getByteLength(s) {
+        let b, i, c;
+        for(b=i=0; c=s.charCodeAt(i++); b+=c>>11?3:c>>7?2:1);
+        return b;
     }
 
-    setTodayDate();
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-
-      const payload = {
-        activity_type: activityType.value,
-        activity_name: document.getElementById('activity_name').value.trim(),
-        date: dateInput.value
-      };
-
-      if (!payload.activity_type || !payload.activity_name || !payload.date) {
-        alert('모든 항목을 입력해주세요.');
-        return;
-      }
-
-      resultEl.textContent = '생성 중...';
-      modeEl.textContent = 'openai';
-      byteLengthEl.textContent = '-';
-      withinLimitEl.textContent = '-';
-      retryCountEl.textContent = '-';
-
-      try {
-        const res = await fetch('/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.detail || '생성 실패');
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        loading.style.display = 'block';
+        resultWrapper.style.display = 'none';
+        
+        const formData = new FormData(form);
+        try {
+            const response = await fetch('/generate', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            
+            resultArea.innerText = data.result;
+            resultWrapper.style.display = 'block';
+            
+            const bytes = getByteLength(data.result);
+            byteCount.innerText = `${bytes} / 700 bytes (NEIS 기준)`;
+            
+        } catch (error) {
+            alert("연결 오류가 발생했습니다.");
+        } finally {
+            loading.style.display = 'none';
         }
+    };
 
-        resultEl.textContent = data.result;
-        modeEl.textContent = data.mode;
-        byteLengthEl.textContent = data.byte_length;
-        withinLimitEl.textContent = data.within_limit ? '예' : '아니오';
-        retryCountEl.textContent = data.retry_count;
-      } catch (err) {
-        resultEl.textContent = `오류: ${err.message}`;
-      }
-    });
-
-    copyBtn.addEventListener('click', async () => {
-      const text = resultEl.textContent.trim();
-      if (!text || text === '결과가 여기에 표시됩니다.' || text.startsWith('오류:') || text === '생성 중...') {
-        alert('복사할 결과가 없습니다.');
-        return;
-      }
-
-      try {
-        await navigator.clipboard.writeText(text);
-        alert('결과를 복사했습니다.');
-      } catch (err) {
-        alert('복사에 실패했습니다.');
-      }
-    });
-  </script>
+    function copyToClipboard() {
+        const text = resultArea.innerText;
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+            alert("복사되었습니다!");
+        });
+    }
+</script>
 </body>
 </html>
