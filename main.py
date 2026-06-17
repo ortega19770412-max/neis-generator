@@ -1,214 +1,140 @@
 import os
-import random
+import re
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from openai import OpenAI
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
-from openai import OpenAI
-
+# 환경 변수 로드
 load_dotenv()
-
-app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-MIN_BYTES = 200
-MAX_BYTES = 700
+app = FastAPI()
 
-def normalize_date(date_str: str) -> str:
-    s = (date_str or "").strip()
-    if not s:
-        return ""
-    s = s.replace("-", ".").replace("/", ".")
-    parts = [p for p in s.split(".") if p]
-    if len(parts) >= 3:
-        y, m, d = parts[0], parts[1], parts[2]
-        return f"{int(y):04d}.{int(m):02d}.{int(d):02d}."
-    return s
+# 템플릿 설정 (templates 폴더가 있어야 함)
+templates = Jinja2Templates(directory="templates")
 
-def clean_text(text: str) -> str:
-    return (text or "").strip()
+def normalize_date(date_str):
+    """날짜 형식을 YYYY.MM.DD. 형태로 표준화"""
+    if not date_str: return ""
+    nums = re.findall(r'\d+', date_str)
+    if len(nums) >= 3:
+        return f"{nums[0]}.{nums[1]}.{nums[2]}."
+    return date_str
 
-def ends_with_noun_ending(text: str) -> bool:
+def ensure_noun_ending(text):
+    """문장 끝을 명사형 어미(~함, ~임, ~됨)로 강제 변환 및 중복 어미 수정"""
+    if not text: return text
     text = text.strip()
-    return text.endswith(("함.", "임.", "됨."))
+    # 1단계: 마침표 제거 후 끝단 처리
+    text = re.sub(r'\.$', '', text)
+    
+    # 2단계: 다/요/오 등으로 끝나는 경우 처리
+    if text.endswith(("하였다", "했다", "함")):
+        text = re.sub(r'(하였다|했다|함)$', '함', text)
+    elif text.endswith(("되었다", "됐다", "됨")):
+        text = re.sub(r'(되었다|됐다|됨)$', '됨', text)
+    elif not text.endswith(("함", "임", "됨", "기", "음")):
+        text += "함"
+    
+    # 3단계: 마침표 다시 찍기
+    return text + "."
 
-def ensure_noun_ending(text: str) -> str:
-    text = clean_text(text)
-    if not text:
-        return text
-
-    if ends_with_noun_ending(text):
-        return text
-
-    # 어색한 중복 종결 처리
-    bad_replacements = {
-        "었음됨.": "됨.", "였음됨.": "됨.", "음됨.": "됨.",
-        "함됨.": "함.", "임됨.": "임.", "됨됨.": "됨.", "함함.": "함."
-    }
-    for old, new in bad_replacements.items():
-        text = text.replace(old, new)
-
-    # 동사형 제거 및 명사형 변환
-    endings = {
-        "했다.": "함.", "하였다.": "함.", "했다": "함.", "하였다": "함.",
-        "이었다.": "임.", "였다.": "임.", "이다.": "임.", "입니다.": "임.",
-        "습니다.": "함.", "다.": "함.", "다": "함.", "요.": "함."
-    }
-    for old, new in endings.items():
-        if text.endswith(old):
-            text = text[:-len(old)] + new
-            break
-
-    if not ends_with_noun_ending(text):
-        text = text.rstrip(".") + "됨."
-    return text
-
-def pad_to_min_bytes(text: str, activity_name: str, min_bytes: int = MIN_BYTES) -> str:
-    # 활동 성격에 따른 꼬리 문구 분기
-    if "폭력" in activity_name or "예방" in activity_name:
+def pad_to_min_bytes(text, min_bytes, activity_name):
+    """바이트가 부족할 경우 활동 성격에 맞는 꼬리표 추가"""
+    current_bytes = len(text.encode('utf-8'))
+    
+    # 활동 성격 구분
+    is_violence = any(k in activity_name for k in ["폭력", "예방", "안전", "인권"])
+    
+    if is_violence:
         tails = [
-            " 신체적 폭력뿐만 아니라 정신적 피해, 재산적 피해 및 정보통신망을 이용한 폭력의 심각성을 깊이 이해함.",
-            " 이를 통해 타인을 존중하는 마음을 기르고 안전한 학교 문화를 조성하는 데 기여할 것을 다짐함.",
-            " 폭력의 다양한 양상을 파악하며 서로 배려하고 공감하는 공동체 의식의 중요성을 체득함."
+            " 타인을 존중하며 갈등을 평화적으로 해결하는 공동체 의식을 실천하기 위해 노력함.",
+            " 학교폭력의 위험성을 깊이 인지하고 안전한 학교 문화를 조성하는 데 앞장서는 태도를 보임.",
+            " 상대방의 입장에서 공감하며 성숙한 대화로 문제를 해결하려는 의지가 돋보임."
         ]
     else:
         tails = [
-            " 해당 활동을 통해 자신의 소질을 발견하고 주도적으로 탐색하며 공동체 역량을 강화함.",
-            " 동료와 협력하며 문제를 해결하는 과정에서 성숙한 태도와 책임감을 기르는 계기가 됨.",
-            " 주어진 과제를 성실히 수행하며 자신의 역량을 발휘하고 긍정적인 변화를 이끌어냄."
+            " 활동을 통해 자신의 소질을 발견하고 진로를 구체화하는 데 적극적으로 임함.",
+            " 창의적인 사고와 책임감 있는 태도로 주어진 과제를 성실히 수행하여 성장을 이룸.",
+            " 배운 내용을 바탕으로 자기주도적 역량을 강화하며 지속적으로 탐구하는 자세를 보임."
         ]
-
-    while len(text.encode("utf-8")) < min_bytes:
-        addon = random.choice(tails)
-        if not text.endswith(" "): text += " "
-        text = text.rstrip(".") + addon
+        
+    idx = 0
+    while len(text.encode('utf-8')) < min_bytes and idx < len(tails):
+        text = text.rstrip('.') + tails[idx]
+        idx += 1
     return text
 
-class ActivityRequest(BaseModel):
-    activity_type: str
-    activity_date: str
-    activity_name: str
-    activity_content: str
-
 @app.get("/", response_class=HTMLResponse)
-def index():
-    return """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NEIS 기록 생성기</title>
-  <style>
-    body { font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f4f7f6; }
-    .card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-    h1 { color: #2c3e50; text-align: center; }
-    label { display: block; margin-top: 15px; font-weight: bold; }
-    input, select, textarea { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; }
-    button { width: 100%; margin-top: 20px; padding: 15px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-    .btn-gen { background: #3498db; color: white; }
-    .btn-copy { background: #2ecc71; color: white; margin-top: 10px; }
-    .result { margin-top: 25px; padding: 20px; background: #fffbe6; border: 1px solid #ffe58f; border-radius: 8px; display: none; white-space: pre-wrap; line-height: 1.6; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>📝 NEIS 기록 생성기</h1>
-    <label>활동 유형</label>
-    <select id="activity_type">
-      <option value="자율활동">자율활동</option>
-      <option value="진로활동">진로활동</option>
-      <option value="동아리활동">동아리활동</option>
-    </select>
-    <label>날짜</label><input type="date" id="activity_date" />
-    <label>활동명</label><input type="text" id="activity_name" placeholder="예: 학급 자치 회의, 진로 캠프" />
-    <label>활동 내용</label>
-    <textarea id="activity_content" placeholder="핵심 키워드나 내용을 입력하세요."></textarea>
-    <button class="btn-gen" onclick="generate()">기록 생성</button>
-    <button class="btn-copy" onclick="copy()">복사하기</button>
-    <div id="result" class="result"></div>
-  </div>
-  <script>
-    async function generate() {
-      const resDiv = document.getElementById('result');
-      resDiv.style.display = 'block';
-      resDiv.innerText = '생성 중...';
-      const response = await fetch('/generate', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          activity_type: document.getElementById('activity_type').value,
-          activity_date: document.getElementById('activity_date').value,
-          activity_name: document.getElementById('activity_name').value,
-          activity_content: document.getElementById('activity_content').value
-        })
-      });
-      const data = await response.json();
-      resDiv.innerText = data.record || data.detail;
-    }
-    function copy() {
-      const text = document.getElementById('result').innerText;
-      if(!text || text === '생성 중...') return;
-      navigator.clipboard.writeText(text).then(() => alert('복사되었습니다!'));
-    }
-  </script>
-</body>
-</html>
-"""
+async def read_form(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/generate")
-async def generate_record(req: ActivityRequest):
-    activity_type = clean_text(req.activity_type)
-    activity_date = normalize_date(req.activity_date)
-    activity_name = clean_text(req.activity_name)
-    activity_content = clean_text(req.activity_content)
+async def generate_record(
+    activity_name: str = Form(...),
+    activity_date: str = Form(...),
+    student_keywords: str = Form(...)
+):
+    norm_date = normalize_date(activity_date)
+    prefix = f"{activity_name}({norm_date})"
+    
+    # 활동명에 따른 동적 프롬프트 분기
+    is_violence = any(k in activity_name for k in ["폭력", "예방", "안전", "인권"])
+    
+    if is_violence:
+        system_role = "너는 대한민국 고등학교 교사야. 학생의 학교폭력 예방 활동 기록을 전문적으로 작성해."
+        user_content = f"""
+활동명: {activity_name} ({norm_date})
+학생 키워드: {student_keywords}
 
-    if not all([activity_type, activity_date, activity_name, activity_content]):
-        return JSONResponse({"detail": "모든 정보를 입력해주세요."}, status_code=400)
+위 정보를 바탕으로 '학교폭력 예방'의 취지에 맞게 생활기록부를 작성하라.
+1. 반드시 '신체적, 정신적, 재산적, 정보통신망(사이버)' 피해의 위험성을 깨달았다는 내용을 포함할 것.
+2. 타인에 대한 이해와 존중, 갈등의 평화적 해결 의지를 강조할 것.
+3. 반드시 명사형 어미(~함, ~됨, ~임)로 끝맺을 것.
+4. 시작은 반드시 '{prefix}'로 할 것.
+5. 분량: 한글 기준 150자 내외.
+"""
+    else:
+        system_role = "너는 대한민국 고등학교 교사야. 학생의 진로 및 자율활동 기록을 전문적으로 작성해."
+        user_content = f"""
+활동명: {activity_name} ({norm_date})
+학생 키워드: {student_keywords}
 
-    prefix = f"{activity_name}({activity_date})을 통해"
-
-    system_prompt = "너는 대한민국 고등학교 생기부 작성 전문가이다. 관찰 위주의 객관적이고 전문적인 문체로 작성하라."
-    user_prompt = f"""
-다음 정보를 바탕으로 생기부 {activity_type} 기록을 1문장으로 작성하라.
-- 시작 문구: "{prefix}"
-- 활동 내용: {activity_content}
-- 조건 1: 활동 내용의 핵심 키워드를 반영하여 구체적인 변화나 성장이 드러나게 작성.
-- 조건 2: 활동명이 '폭력'이나 '예방'을 포함하면 신체적, 정신적, 재산적, 정보통신망 이용 피해 예방 내용을 포함할 것.
-- 어미: 반드시 '~함.', '~임.', '~됨.'과 같은 명사형 종결 어미로 마칠 것.
-- 길이: 200~700바이트 사이로 상세하게 작성.
+위 정보를 바탕으로 해당 활동의 성격(진로/자율/체험/캠프 등)에 맞춰 생활기록부를 작성하라.
+1. 학생이 배운 점, 구체적 성장 과정, 자기주도적 역량을 중심으로 서술할 것.
+2. '학교폭력' 관련 내용은 절대 포함하지 말 것.
+3. 반드시 명사형 어미(~함, ~됨, ~임)로 끝맺을 것.
+4. 시작은 반드시 '{prefix}'로 할 것.
+5. 분량: 한글 기준 150자 내외.
 """
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.8,
-        )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_role},
+            {"role": "user", "content": user_content}
+        ],
+        temperature=0.7
+    )
 
-        text = response.choices[0].message.content.strip()
-        
-        # 시작 문구 검증 및 보정
-        if not text.startswith(activity_name):
-            text = f"{prefix} {text.replace(prefix, '').strip()}"
+    generated_text = response.choices[0].message.content.strip()
+    
+    # 후처리: 접두어 확인, 어미 정리, 바이트 조절(200~700)
+    if not generated_text.startswith(activity_name):
+        generated_text = f"{prefix} {generated_text}"
+    
+    generated_text = ensure_noun_ending(generated_text)
+    final_text = pad_to_min_bytes(generated_text, 250, activity_name)
+    
+    # 최대 700바이트 제한(NEIS 기준)
+    while len(final_text.encode('utf-8')) > 700:
+        final_text = final_text[:-1]
+    
+    return {"result": final_text}
 
-        text = ensure_noun_ending(text)
-        
-        # 최소 바이트 체크 및 패딩
-        if len(text.encode("utf-8")) < MIN_BYTES:
-            text = pad_to_min_bytes(text, activity_name, MIN_BYTES)
-
-        # 최대 바이트 체크 및 절삭
-        if len(text.encode("utf-8")) > MAX_BYTES:
-            raw = text.encode("utf-8")[:MAX_BYTES-15]
-            text = raw.decode("utf-8", errors="ignore").rstrip()
-            text = ensure_noun_ending(text)
-
-        return {"record": text}
-
-    except Exception as e:
-        return JSONResponse({"detail": f"생성 오류: {str(e)}"}, status_code=500)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
